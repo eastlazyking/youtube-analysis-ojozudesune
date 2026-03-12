@@ -67,6 +67,17 @@ Examples:
         help="Re-fetch comments for cached videos (updates top-comment ranking)",
     )
     parser.add_argument(
+        "--retry-failed-transcripts",
+        action="store_true",
+        help="Re-fetch transcripts for videos that were previously attempted but failed",
+    )
+    parser.add_argument(
+        "--video",
+        default=None,
+        metavar="VIDEO_ID",
+        help="Fetch transcript for a single video ID (skips channel video list fetch)",
+    )
+    parser.add_argument(
         "--output-dir",
         default="./reports",
         metavar="DIR",
@@ -175,46 +186,60 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # Step 2 — Fetch video list & detect new videos                        #
     # ------------------------------------------------------------------ #
-    _step(2, TOTAL_STEPS, "Fetching video list, comparing against cache...")
-    try:
-        videos = yt.list_channel_videos(
-            channel_id=channel_id,
-            max_results=args.max_videos,
-        )
-        print(f"   -> {len(videos)} videos fetched")
-    except Exception as exc:
-        print(f"Failed to fetch video list: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    # Save video list to disk for later reference
-    store.save_json(store.video_list_path(channel_id), videos)
-
-    shorts_count = sum(1 for v in videos if v.get("is_short"))
-    print(f"   -> Regular: {len(videos) - shorts_count} / Shorts: {shorts_count}")
-
-    # Regular videos first, then Shorts (for comment fetch priority)
-    all_video_ids = (
-        [v["video_id"] for v in videos if not v.get("is_short")]
-        + [v["video_id"] for v in videos if v.get("is_short")]
-    )
-
-    if args.force_refresh:
-        new_video_ids = all_video_ids
-        print("   -> --force-refresh: re-fetching all videos")
+    if args.video:
+        _step(2, TOTAL_STEPS, f"Single-video mode: {args.video}")
+        videos = [{"video_id": args.video, "title": args.video, "is_short": False}]
+        all_video_ids = [args.video]
+        new_video_ids = [args.video]
+        print(f"   -> Targeting single video, skipping channel list fetch")
     else:
-        new_video_ids = cache.get_new_video_ids(channel_id, all_video_ids)
-        print(f"   -> New: {len(new_video_ids)} / Cached: {len(all_video_ids) - len(new_video_ids)}")
+        _step(2, TOTAL_STEPS, "Fetching video list, comparing against cache...")
+        try:
+            videos = yt.list_channel_videos(
+                channel_id=channel_id,
+                max_results=args.max_videos,
+            )
+            print(f"   -> {len(videos)} videos fetched")
+        except Exception as exc:
+            print(f"Failed to fetch video list: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        # Save video list to disk for later reference
+        store.save_json(store.video_list_path(channel_id), videos)
+
+        shorts_count = sum(1 for v in videos if v.get("is_short"))
+        print(f"   -> Regular: {len(videos) - shorts_count} / Shorts: {shorts_count}")
+
+        # Regular videos first, then Shorts (for comment fetch priority)
+        all_video_ids = (
+            [v["video_id"] for v in videos if not v.get("is_short")]
+            + [v["video_id"] for v in videos if v.get("is_short")]
+        )
+
+        if args.force_refresh:
+            new_video_ids = all_video_ids
+            print("   -> --force-refresh: re-fetching all videos")
+        else:
+            new_video_ids = cache.get_new_video_ids(channel_id, all_video_ids)
+            print(f"   -> New: {len(new_video_ids)} / Cached: {len(all_video_ids) - len(new_video_ids)}")
 
     # ------------------------------------------------------------------ #
     # Step 3 — Transcripts                                                 #
     # ------------------------------------------------------------------ #
     transcripts: dict = {}
     if not args.skip_transcripts:
-        _step(3, TOTAL_STEPS, "Fetching transcripts (new videos only)...")
+        if args.retry_failed_transcripts:
+            cached_transcript_ids = cache.get_cached_transcript_ids(channel_id, all_video_ids)
+            retry_ids = [vid for vid in all_video_ids if vid not in cached_transcript_ids]
+            fetch_ids = list(dict.fromkeys(new_video_ids + retry_ids))  # dedup, preserve order
+            _step(3, TOTAL_STEPS, f"Fetching transcripts (new + {len(retry_ids)} previously failed)...")
+        else:
+            fetch_ids = new_video_ids
+            _step(3, TOTAL_STEPS, "Fetching transcripts (new videos only)...")
         try:
             transcripts = transcript_fetcher.fetch_batch(
                 video_ids=all_video_ids,
-                new_only_ids=new_video_ids,
+                new_only_ids=fetch_ids,
                 channel_id=channel_id,
                 force=args.force_refresh,
             )

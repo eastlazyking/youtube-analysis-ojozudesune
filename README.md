@@ -104,6 +104,8 @@ python main.py --channel @ChannelHandle --refresh-comments
 | `--max-comments` | Maximum comments per video | `500` |
 | `--force-refresh` | Ignore all cache and re-fetch everything | `false` |
 | `--refresh-comments` | Re-fetch comments for cached videos | `false` |
+| `--retry-failed-transcripts` | Re-fetch transcripts that previously failed (no file saved) | `false` |
+| `--video` | Fetch transcript for a single video ID, skips channel list fetch | — |
 | `--skip-transcripts` | Skip transcript fetching and related analyses | `false` |
 | `--skip-comments` | Skip comment fetching and audience analysis | `false` |
 | `--skip-extraction` | Skip location/knowledge extraction | `false` |
