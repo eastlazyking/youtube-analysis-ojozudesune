@@ -12,6 +12,8 @@ Fetch transcripts and comments from a YouTube channel, then use Claude AI to ana
 | Golf knowledge index | Organise knowledge and tips per episode with video links for direct reference |
 | Incremental updates | Auto-detect new videos, fetch only new data, preserve historical analysis snapshots |
 
+---
+
 ## Quick Start
 
 ### 1. Install dependencies
@@ -24,71 +26,103 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env and fill in YOUTUBE_API_KEY and ANTHROPIC_API_KEY
+# Edit .env and fill in YOUTUBE_API_KEY and ANTHROPIC_API_KEY (or LLM_BACKEND=local)
 ```
 
 **How to get API keys:**
 - YouTube Data API v3: [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → Enable YouTube Data API v3
 - Anthropic API: [console.anthropic.com](https://console.anthropic.com/)
 
-### 3. Preview data size and estimated cost (no Claude API calls)
+### 3. Run full analysis
 
 ```bash
-python main.py --channel @ChannelHandle --data-only
-```
-
-This fetches transcripts and comments, then prints a token count and cost estimate for each analysis type without spending any Claude API credits.
-
-### 4. Run full analysis
-
-```bash
-# Basic usage
 python main.py --channel @ChannelHandle
-
-# Analyse 30 videos, fetch 200 comments each
-python main.py --channel @ChannelHandle --max-videos 30 --max-comments 200
-
-# Force re-fetch (ignore cache)
-python main.py --channel @ChannelHandle --force-refresh
-
-# Skip comment analysis (brand analysis only)
-python main.py --channel @ChannelHandle --skip-comments
-
-# Update cached comments to latest
-python main.py --channel @ChannelHandle --refresh-comments
 ```
 
-## Output files
-
-```
-reports/{channel_id}/
-├── audience_report.md       # Audience profile report
-├── brand_report.md          # Brand positioning report
-├── knowledge_index.md       # Golf knowledge index (with video links)
-├── knowledge_index.csv      # Knowledge index table (filterable in Excel)
-├── locations_database.json  # Full location / food / equipment database
-├── locations_database.csv   # Locations CSV (importable to Google My Maps)
-├── food_database.csv        # Food items CSV
-├── equipment_database.csv   # Equipment CSV
-├── comments.csv             # Raw comments export
-├── transcripts.csv          # Raw transcripts export
-└── summary.json             # Aggregated stats + historical analysis snapshots
-```
-
-## CLI reference
+### CLI reference (`main.py`)
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--channel` | YouTube channel @handle or ID (required) | — |
-| `--max-videos` | Maximum videos to analyse | 20 |
-| `--max-comments` | Maximum comments per video | 100 |
-| `--data-only` | Fetch data only, print token/cost estimate, no Claude calls | False |
-| `--force-refresh` | Ignore all cache and re-fetch everything | False |
-| `--refresh-comments` | Re-fetch comments for cached videos only | False |
-| `--skip-transcripts` | Skip transcript fetching and related analyses | False |
-| `--skip-comments` | Skip comment fetching and audience analysis | False |
-| `--skip-extraction` | Skip location/knowledge extraction (audience + brand only) | False |
-| `--output-dir` | Report output directory | `./reports` |
+| `--channel` | YouTube channel @handle or Channel ID (required) | — |
+
+> All other options (max videos, LLM backend, skip flags, etc.) are configured via `.env`. See `.env.example` for the full list.
+
+---
+
+## Offline analysis (no YouTube API needed)
+
+If data has already been collected and saved under `data/`, use `analyze_local.py` to run LLM analysis directly on the cached files — no YouTube API key required.
+
+```bash
+# Audience + brand analysis only (fastest)
+python analyze_local.py --channel-id UCxxxxxxxxxx --llm local --skip-extraction
+
+# Full analysis including location / knowledge extraction
+python analyze_local.py --channel-id UCxxxxxxxxxx --llm local
+
+# Use a specific Ollama model
+python analyze_local.py --channel-id UCxxxxxxxxxx --llm local --model gemma3:12b
+
+# Limit to the N most recent videos
+python analyze_local.py --channel-id UCxxxxxxxxxx --llm local --max-videos 20
+
+# Use Claude API instead of local
+python analyze_local.py --channel-id UCxxxxxxxxxx --llm claude
+```
+
+### CLI reference (`analyze_local.py`)
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--channel-id` | Channel ID from the `data/` directory (required) | — |
+| `--data-dir` | Base data directory | `./data` |
+| `--output-dir` | Report output root directory | `./reports` |
+| `--llm` | LLM backend: `claude` or `local` (Ollama) | `local` |
+| `--model` | Override model name (e.g. `gemma3:12b`, `qwen3:8b`) | `qwen3:8b` |
+| `--ollama-url` | Ollama API base URL | `http://localhost:11434/v1` |
+| `--max-videos` | Limit number of videos included in analysis | all |
+| `--skip-audience` | Skip audience analysis (comments) | `false` |
+| `--skip-brand` | Skip brand analysis (transcripts) | `false` |
+| `--skip-extraction` | Skip location/knowledge extraction — runs only audience + brand, much faster | `false` |
+
+---
+
+## Output
+
+### Report files
+
+Files generated depend on which flags are used:
+
+```
+reports/{channel_id}/
+├── audience_report.md       # Audience profile — generated unless --skip-comments / --skip-audience
+├── brand_report.md          # Brand positioning  — generated unless --skip-transcripts / --skip-brand
+├── comments.csv             # Raw comments export
+├── transcripts.csv          # Raw transcripts export
+├── summary.json             # Aggregated stats + analysis snapshots (always written)
+│
+│   # The following are only generated when extraction is NOT skipped
+│   # (i.e. --skip-extraction is NOT set)
+├── knowledge_index.md       # Knowledge index with video links
+├── knowledge_index.csv      # Knowledge index (filterable in Excel)
+├── locations_database.json  # Full location / food / equipment database
+├── locations_database.csv   # Locations (importable to Google My Maps)
+├── food_database.csv        # Food items mentioned across videos
+└── equipment_database.csv   # Equipment / gear mentioned
+```
+
+### Raw data cache
+
+```
+data/{channel_id}/
+├── videos.json              # Video metadata list
+├── transcripts/{video_id}.json
+└── comments/{video_id}.json
+```
+
+Cached data is reused on subsequent runs — only new videos trigger API calls.
+
+---
 
 ## Incremental updates
 
@@ -102,14 +136,17 @@ python main.py --channel @ChannelHandle
 - Only **new videos** have their transcripts and comments fetched
 - Each run appends a snapshot to `summary.json`'s `analysis_history` for tracking changes over time
 
+---
+
 ## Project structure
 
 ```
-├── config/          # Settings loader
-├── collectors/      # YouTube API data fetching
-├── storage/         # Local cache management
-├── analyzers/       # Claude AI analysis (audience + brand)
-├── extractors/      # Structured knowledge extraction (locations + knowledge)
-├── reporters/       # Report output (Markdown / JSON / CSV)
-└── main.py          # CLI entry point
+├── main.py              # CLI entry point (fetch + analyse, requires YouTube API)
+├── analyze_local.py     # Offline analysis on cached data (no YouTube API needed)
+├── config/              # Settings and .env loader
+├── collectors/          # YouTube Data API + transcript fetching
+├── analyzers/           # LLM clients (Claude / Ollama) + audience/brand analysis
+├── extractors/          # Location / knowledge structured extraction
+├── reporters/           # Markdown / JSON / CSV output
+└── storage/             # Local cache management
 ```
