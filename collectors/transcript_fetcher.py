@@ -7,8 +7,8 @@ from tqdm import tqdm
 
 
 class TranscriptFetcher:
-    def __init__(self, languages: list | None = None, store=None):
-        self.preferred_languages = languages or ["ja", "zh-Hant", "zh-Hans", "en"]
+    def __init__(self, preferred_languages: list | None = None, store=None):
+        self.preferred_languages = preferred_languages or ["ja", "zh-Hant", "zh-Hans", "en"]
         self.store = store
 
     # ------------------------------------------------------------------

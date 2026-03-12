@@ -41,11 +41,28 @@ python main.py --channel @ChannelHandle
 
 ### CLI reference (`main.py`)
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--channel` | YouTube channel @handle or Channel ID (required) | — |
+```bash
+python main.py --channel @ChannelHandle
+python main.py --channel UCxxxxxxxxxx
+```
 
-> All other options (max videos, LLM backend, skip flags, etc.) are configured via `.env`. See `.env.example` for the full list.
+| Flag | Description |
+|------|-------------|
+| `--channel` | YouTube channel @handle or Channel ID (required) |
+
+All other options are set in `.env` (copy from `.env.example`):
+
+| `.env` variable | Description | Default |
+|-----------------|-------------|---------|
+| `LLM_BACKEND` | `claude` or `local` (Ollama) | `claude` |
+| `CLAUDE_MODEL` | Claude model name | `claude-sonnet-4-6` |
+| `LOCAL_LLM_MODEL` | Ollama model name | `gemma3:12b` |
+| `LOCAL_LLM_URL` | Ollama API base URL | `http://localhost:11434/v1` |
+| `MAX_VIDEOS` | Maximum videos to fetch and analyse | `50` |
+| `MAX_COMMENTS_PER_VIDEO` | Maximum comments per video | `100` |
+| `TRANSCRIPT_LANGUAGES` | Language priority (comma-separated) | `ja,zh-Hant,zh-Hans,en` |
+| `DATA_DIR` | Raw data cache directory | `./data` |
+| `REPORTS_DIR` | Report output directory | `./reports` |
 
 ---
 
