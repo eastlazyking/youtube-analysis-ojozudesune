@@ -333,5 +333,81 @@ def get_ollama_models():
     except Exception as e:
         return jsonify({'models': [], 'error': str(e)})
 
+@app.route('/api/channels/<channel_id>/videos', methods=['GET'])
+def get_channel_videos(channel_id):
+    try:
+        settings = load_settings()
+        path = Path(settings.data_dir) / 'raw' / 'videos' / channel_id / 'video_list.json'
+        if not path.exists():
+            return jsonify({'videos': []})
+        videos = json.loads(path.read_text(encoding='utf-8'))
+        return jsonify({'videos': [
+            {'video_id': v['video_id'], 'title': v.get('title', ''), 'published_at': v.get('published_at', '')}
+            for v in videos
+        ]})
+    except Exception as e:
+        return jsonify({'error': str(e), 'videos': []}), 500
+
+
+@app.route('/api/channels/<channel_id>/topic_analysis', methods=['POST'])
+def topic_analysis(channel_id):
+    data = request.json or {}
+    stage           = data.get('stage', 1)
+    n_topics_title  = data.get('n_topics_title', 10)
+    n_topics_comment = data.get('n_topics_comment', 15)
+    video_ids       = data.get('video_ids', [])
+
+    def run(msg_queue):
+        try:
+            settings = load_settings()
+            out_dir   = Path(settings.reports_dir) / channel_id
+            topic_dir = out_dir / 'topic_analysis'
+
+            summary_path = out_dir / 'summary.json'
+            channel_title = channel_id
+            if summary_path.exists():
+                channel_title = json.loads(summary_path.read_text(encoding='utf-8')).get('channel_title', channel_id)
+
+            from modules.analysis.comment_time import analyze_comment_timing
+            msg_queue.put('留言時間分析中...')
+            analyze_comment_timing(channel_id, settings.data_dir, str(topic_dir))
+
+            from modules.analysis.identity_gap import IdentityGapAnalyzer, VideoLevelAnalyzer
+            msg_queue.put('建立主題模型（Stage 1）... 這步需要幾分鐘')
+            gap = IdentityGapAnalyzer(channel_id, settings.data_dir)
+            gap.run(str(topic_dir), n_topics_title=n_topics_title, n_topics_comment=n_topics_comment)
+
+            if stage == 2 and video_ids:
+                msg_queue.put(f'個別影片深度分析（Stage 2）: {len(video_ids)} 部...')
+                micro = VideoLevelAnalyzer(channel_id, settings.data_dir)
+                micro.run(video_ids, output_dir=str(topic_dir / 'micro'))
+
+            from modules.reporters.html_report import generate_html_report
+            msg_queue.put('產生 HTML 報告...')
+            generate_html_report(
+                channel_id=channel_id,
+                channel_title=channel_title,
+                report_dir=str(out_dir),
+                topic_dir=str(topic_dir),
+                output_path=str(out_dir / 'report.html'),
+            )
+
+            msg_queue.put('DONE:' + json.dumps({'success': True}))
+        except Exception as e:
+            import traceback
+            msg_queue.put('ERROR:' + str(e) + '\n' + traceback.format_exc())
+
+    return _make_task(run)
+
+
+@app.route('/api/channels/<channel_id>/report.html', methods=['GET'])
+def get_topic_report(channel_id):
+    settings = load_settings()
+    path = Path(settings.reports_dir) / channel_id / 'report.html'
+    if not path.exists():
+        return '尚無主題分析報告', 404
+    return path.read_text(encoding='utf-8'), 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, use_reloader=False, port=5000)

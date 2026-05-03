@@ -25,7 +25,40 @@
             <button onclick="channelFetchAndAnalyze(selectedChannelId())">補抓並分析</button>
             <button onclick="channelAnalyzeCached(selectedChannelId())">直接分析</button>
             <button onclick="channelFetchOnly(selectedChannelId())">僅補抓</button>
+            <button onclick="toggleTopicPanel()">主題分析</button>
             <button onclick="channelDelete(selectedChannelId())">刪除</button>
+        </div>
+
+        <div id="topicPanel" style="display:none; border:1px solid #ccc; padding:12px; margin-top:8px;">
+            <h3>主題分析設定</h3>
+
+            <div>
+                <label>分析階段:</label><br>
+                <label><input type="radio" name="stage" value="1" checked onchange="onStageChange()"> 階段一（全頻道主題建模）</label><br>
+                <label><input type="radio" name="stage" value="2" onchange="onStageChange()"> 階段一＋二（含個別影片深度分析）</label>
+            </div>
+
+            <div style="margin-top:8px;">
+                <label>標題主題數: <input type="number" id="nTopicsTitle" value="10" min="3" max="30" style="width:55px"></label>
+                &nbsp;
+                <label>留言主題數: <input type="number" id="nTopicsComment" value="15" min="3" max="30" style="width:55px"></label>
+            </div>
+
+            <div id="videoSelectPanel" style="display:none; margin-top:10px;">
+                <strong>選擇目標影片（可多選）:</strong>
+                <div id="videoCheckboxList" style="max-height:200px; overflow-y:auto; border:1px solid #ddd; padding:6px; margin-top:4px;">載入中...</div>
+            </div>
+
+            <div style="margin-top:10px;">
+                <button onclick="runTopicAnalysis(selectedChannelId())">開始主題分析</button>
+                <button onclick="toggleTopicPanel()">取消</button>
+            </div>
+        </div>
+
+        <div id="topicDone" style="display:none; margin-top:8px; padding:10px; border:1px solid #4a4; background:#f0fff0;">
+            主題分析完成！
+            <button onclick="openTopicReport()">開啟報告</button>
+            <button onclick="document.getElementById('topicDone').style.display='none'">關閉</button>
         </div>
 
         <h2>新增頻道</h2>
@@ -275,6 +308,108 @@
             loadMarkdownReport(channelId, 'audience_report.md', 'audienceContent');
             loadMarkdownReport(channelId, 'brand_report.md', 'brandContent');
         }
+
+        // ── topic analysis ──────────────────────────────────────────
+        let _topicReportChannelId = null;
+
+        function toggleTopicPanel() {
+            const panel = document.getElementById('topicPanel');
+            const isHidden = panel.style.display === 'none';
+            panel.style.display = isHidden ? 'block' : 'none';
+            if (isHidden) {
+                document.getElementById('topicDone').style.display = 'none';
+                onStageChange();
+            }
+        }
+
+        function onStageChange() {
+            const stage = document.querySelector('input[name="stage"]:checked').value;
+            const videoPanel = document.getElementById('videoSelectPanel');
+            if (stage === '2') {
+                videoPanel.style.display = 'block';
+                loadVideoList(selectedChannelId());
+            } else {
+                videoPanel.style.display = 'none';
+            }
+        }
+
+        async function loadVideoList(channelId) {
+            const container = document.getElementById('videoCheckboxList');
+            container.textContent = '載入中...';
+            try {
+                const res = await fetch(`/api/channels/${channelId}/videos`);
+                const data = await res.json();
+                if (!data.videos || data.videos.length === 0) {
+                    container.textContent = '無影片資料';
+                    return;
+                }
+                container.innerHTML = data.videos.map(v =>
+                    `<label style="display:block; padding:2px 0;">` +
+                    `<input type="checkbox" class="videoCheckbox" value="${v.video_id}"> ` +
+                    `${v.title.substring(0, 60)}</label>`
+                ).join('');
+            } catch {
+                container.textContent = '載入失敗';
+            }
+        }
+
+        function runTopicAnalysis(channelId) {
+            if (!channelId) return;
+            const stage = parseInt(document.querySelector('input[name="stage"]:checked').value);
+            const videoIds = stage === 2
+                ? [...document.querySelectorAll('.videoCheckbox:checked')].map(cb => cb.value)
+                : [];
+            if (stage === 2 && videoIds.length === 0) {
+                alert('請選擇至少一部影片');
+                return;
+            }
+
+            _topicReportChannelId = channelId;
+            document.getElementById('topicPanel').style.display = 'none';
+            document.getElementById('topicDone').style.display = 'none';
+
+            status.style.display = 'block';
+            results.style.display = 'none';
+            statusLog.textContent = '';
+
+            fetch(`/api/channels/${channelId}/topic_analysis`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    stage,
+                    n_topics_title:   parseInt(document.getElementById('nTopicsTitle').value),
+                    n_topics_comment: parseInt(document.getElementById('nTopicsComment').value),
+                    video_ids: videoIds,
+                })
+            })
+            .then(res => res.json())
+            .then(({ task_id }) => {
+                const es = new EventSource(`/api/stream/${task_id}`);
+                es.onmessage = (event) => {
+                    const { message: msg } = JSON.parse(event.data);
+                    if (msg.startsWith('DONE:')) {
+                        es.close();
+                        status.style.display = 'none';
+                        document.getElementById('topicDone').style.display = 'block';
+                    } else if (msg.startsWith('ERROR:')) {
+                        es.close();
+                        statusLog.textContent += '\n錯誤: ' + msg.substring(6);
+                    } else {
+                        statusLog.textContent += msg + '\n';
+                        statusLog.scrollTop = statusLog.scrollHeight;
+                    }
+                };
+                es.onerror = () => { statusLog.textContent += '\n連線中斷'; es.close(); };
+            })
+            .catch(e => { statusLog.textContent = '錯誤: ' + e.message; });
+        }
+
+        function openTopicReport() {
+            if (_topicReportChannelId) {
+                window.open(`/api/channels/${_topicReportChannelId}/report.html`, '_blank');
+            }
+        }
+        // ────────────────────────────────────────────────────────────
 
         loadOllamaModels();
         loadChannelList();
